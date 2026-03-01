@@ -1,0 +1,45 @@
+{
+  "name": "@sinas/sdk",
+  "version": "0.1.0",
+  "description": "SINAS SDK — React hooks and vanilla client for queries, functions, states, and chat",
+  "license": "AGPL-3.0",
+  "author": "SINAS Platform <https://github.com/sinas-platform>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sinas-platform/sinas-js.git"
+  },
+  "keywords": ["sinas", "sdk", "react", "hooks"],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "require": "./dist/client.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  },
+  "devDependencies": {
+    "react": "^18.3.1",
+    "@types/react": "^18.3.12",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  }
+}
