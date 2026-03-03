@@ -1,29 +1,71 @@
 import React from 'react';
-import { createChat, sendMessage, streamMessage } from '../client/chat';
+import { createChat, getChat, streamMessage, approveToolCall, streamFromChannel } from '../client/chat';
 import { useClient } from './context';
-import type { ChatMessage, SSEChunk } from '../client/types';
+import type { ChatMessageFull, ApprovalRequest, SSEChunk, MessageContent } from '../client/types';
+
+export interface ChatSessionMessage extends ChatMessageFull {
+  /** True while streaming content is being appended */
+  streaming?: boolean;
+}
 
 export interface UseChatResult {
   chatId: string | null;
-  messages: ChatMessage[];
+  messages: ChatSessionMessage[];
   loading: boolean;
   streaming: boolean;
   error: string | null;
-  createChat: (input?: Record<string, unknown>) => Promise<string | undefined>;
-  sendMessage: (content: string) => Promise<ChatMessage | undefined>;
-  streamMessage: (content: string) => AbortController | undefined;
+  pendingApprovals: ApprovalRequest[];
+  send: (content: MessageContent) => void;
+  approve: (toolCallId: string) => void;
+  reject: (toolCallId: string) => void;
+  stop: () => void;
+  clearError: () => void;
 }
 
-export function useChat(agentRef: string): UseChatResult {
+export interface UseChatOptions {
+  chatId?: string;
+  input?: Record<string, unknown>;
+}
+
+export function useChat(
+  agentRef: string,
+  options?: UseChatOptions,
+): UseChatResult {
   const client = useClient();
 
-  const [chatId, setChatId] = React.useState<string | null>(null);
-  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
+  const [chatId, setChatId] = React.useState<string | null>(options?.chatId ?? null);
+  const [messages, setMessages] = React.useState<ChatSessionMessage[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = React.useState<ApprovalRequest[]>([]);
 
   const abortRef = React.useRef<AbortController | null>(null);
+  const chatIdRef = React.useRef<string | null>(chatId);
+  chatIdRef.current = chatId;
+
+  // Load existing chat on mount if chatId provided
+  React.useEffect(() => {
+    if (!options?.chatId) return;
+    let cancelled = false;
+
+    setLoading(true);
+    getChat(client, options.chatId)
+      .then((detail) => {
+        if (cancelled) return;
+        setChatId(detail.id);
+        setMessages(detail.messages);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError((e as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [client, options?.chatId]);
 
   // Cleanup on unmount
   React.useEffect(() => {
@@ -32,115 +74,222 @@ export function useChat(agentRef: string): UseChatResult {
     };
   }, []);
 
-  const doCreateChat = React.useCallback(
-    async (input?: Record<string, unknown>) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await createChat(client, agentRef, input);
-        setChatId(result.id);
-        setMessages([]);
-        return result.id;
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setLoading(false);
+  const handleStreamChunks = React.useCallback(
+    (assistantId: string) => (chunk: SSEChunk) => {
+      if (chunk.event === 'message') {
+        try {
+          const parsed = JSON.parse(chunk.data);
+          if (parsed.content) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: (m.content || '') + parsed.content }
+                  : m,
+              ),
+            );
+          }
+        } catch {
+          // Non-JSON content chunk — append raw data
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: (m.content || '') + chunk.data }
+                : m,
+            ),
+          );
+        }
+      } else if (chunk.event === 'approval_required') {
+        try {
+          const parsed = JSON.parse(chunk.data) as ApprovalRequest;
+          setPendingApprovals((prev) => [...prev, parsed]);
+        } catch {
+          // ignore malformed approval events
+        }
+      } else if (chunk.event === 'error') {
+        try {
+          const parsed = JSON.parse(chunk.data);
+          setError(parsed.error || 'Stream error');
+        } catch {
+          setError(chunk.data || 'Stream error');
+        }
       }
     },
-    [client, agentRef]
+    [],
   );
 
-  const doSendMessage = React.useCallback(
-    async (content: string) => {
-      if (!chatId) {
-        setError('No active chat. Call createChat first.');
-        return;
+  const refreshMessages = React.useCallback(
+    async (id: string) => {
+      try {
+        const detail = await getChat(client, id);
+        setMessages(detail.messages);
+      } catch {
+        // Refresh is best-effort — streaming content already visible
       }
-      setLoading(true);
-      setError(null);
+    },
+    [client],
+  );
 
-      // Add user message optimistically
-      const userMsg: ChatMessage = {
-        id: `tmp-${Date.now()}`,
-        chatId,
-        role: 'user',
-        content,
-        createdAt: new Date().toISOString(),
+  const send = React.useCallback(
+    (content: MessageContent) => {
+      const doSend = async () => {
+        let activeChatId = chatIdRef.current;
+
+        // Auto-create chat on first send
+        if (!activeChatId) {
+          setLoading(true);
+          setError(null);
+          try {
+            const result = await createChat(client, agentRef, options?.input);
+            activeChatId = result.id;
+            setChatId(result.id);
+            chatIdRef.current = result.id;
+          } catch (e) {
+            setError((e as Error).message);
+            setLoading(false);
+            return;
+          }
+          setLoading(false);
+        }
+
+        abortRef.current?.abort();
+        setStreaming(true);
+        setError(null);
+        setPendingApprovals([]);
+
+        // Add user message optimistically
+        const displayContent = typeof content === 'string' ? content : JSON.stringify(content);
+        const userMsg: ChatSessionMessage = {
+          id: `tmp-user-${Date.now()}`,
+          chatId: activeChatId,
+          role: 'user',
+          content: displayContent,
+          toolCalls: null,
+          toolCallId: null,
+          name: null,
+          createdAt: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, userMsg]);
+
+        // Add empty assistant message to accumulate streaming content
+        const assistantId = `tmp-assistant-${Date.now()}`;
+        const assistantMsg: ChatSessionMessage = {
+          id: assistantId,
+          chatId: activeChatId,
+          role: 'assistant',
+          content: '',
+          toolCalls: null,
+          toolCallId: null,
+          name: null,
+          createdAt: new Date().toISOString(),
+          streaming: true,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+
+        const controller = streamMessage(
+          client,
+          activeChatId,
+          content,
+          handleStreamChunks(assistantId),
+          () => {
+            setStreaming(false);
+            // Refresh to get authoritative server state (tool calls, tool responses)
+            refreshMessages(activeChatId!);
+          },
+          (err: Error) => {
+            setError(err.message);
+            setStreaming(false);
+          },
+        );
+
+        abortRef.current = controller;
       };
-      setMessages(prev => [...prev, userMsg]);
 
-      try {
-        const msg = await sendMessage(client, chatId, content);
-        setMessages(prev => [...prev, msg]);
-        return msg;
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setLoading(false);
-      }
+      doSend();
     },
-    [client, chatId]
+    [client, agentRef, options?.input, handleStreamChunks, refreshMessages],
   );
 
-  const doStreamMessage = React.useCallback(
-    (content: string) => {
-      if (!chatId) {
-        setError('No active chat. Call createChat first.');
-        return;
-      }
+  const handleApproval = React.useCallback(
+    (toolCallId: string, approved: boolean) => {
+      const currentChatId = chatIdRef.current;
+      if (!currentChatId) return;
 
-      abortRef.current?.abort();
+      setPendingApprovals((prev) => prev.filter((a) => a.toolCallId !== toolCallId));
       setStreaming(true);
       setError(null);
 
-      // Add user message optimistically
-      const userMsg: ChatMessage = {
-        id: `tmp-${Date.now()}`,
-        chatId,
-        role: 'user',
-        content,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, userMsg]);
+      // Add placeholder assistant message for the resumed stream
+      const assistantId = `tmp-resume-${Date.now()}`;
+      if (approved) {
+        const assistantMsg: ChatSessionMessage = {
+          id: assistantId,
+          chatId: currentChatId,
+          role: 'assistant',
+          content: '',
+          toolCalls: null,
+          toolCallId: null,
+          name: null,
+          createdAt: new Date().toISOString(),
+          streaming: true,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+      }
 
-      // Add empty assistant message to accumulate chunks
-      const assistantId = `stream-${Date.now()}`;
-      const assistantMsg: ChatMessage = {
-        id: assistantId,
-        chatId,
-        role: 'assistant',
-        content: '',
-        createdAt: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
+      (async () => {
+        try {
+          const result = await approveToolCall(client, currentChatId, toolCallId, approved);
 
-      const controller = streamMessage(
-        client,
-        chatId,
-        content,
-        (chunk: SSEChunk) => {
-          if (chunk.event === 'content' || chunk.event === 'message') {
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantId ? { ...m, content: m.content + chunk.data } : m
-              )
-            );
+          if (!approved) {
+            setStreaming(false);
+            refreshMessages(currentChatId);
+            return;
           }
-        },
-        () => {
-          setStreaming(false);
-        },
-        (err: Error) => {
-          setError(err.message);
+
+          // Connect to resume stream
+          const controller = streamFromChannel(
+            client,
+            currentChatId,
+            result.channelId,
+            handleStreamChunks(assistantId),
+            () => {
+              setStreaming(false);
+              refreshMessages(currentChatId);
+            },
+            (err: Error) => {
+              setError(err.message);
+              setStreaming(false);
+            },
+          );
+
+          abortRef.current = controller;
+        } catch (e) {
+          setError((e as Error).message);
           setStreaming(false);
         }
-      );
-
-      abortRef.current = controller;
-      return controller;
+      })();
     },
-    [client, chatId]
+    [client, handleStreamChunks, refreshMessages],
   );
+
+  const approve = React.useCallback(
+    (toolCallId: string) => handleApproval(toolCallId, true),
+    [handleApproval],
+  );
+
+  const reject = React.useCallback(
+    (toolCallId: string) => handleApproval(toolCallId, false),
+    [handleApproval],
+  );
+
+  const stop = React.useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+  }, []);
+
+  const clearError = React.useCallback(() => {
+    setError(null);
+  }, []);
 
   return {
     chatId,
@@ -148,8 +297,11 @@ export function useChat(agentRef: string): UseChatResult {
     loading,
     streaming,
     error,
-    createChat: doCreateChat,
-    sendMessage: doSendMessage,
-    streamMessage: doStreamMessage,
+    pendingApprovals,
+    send,
+    approve,
+    reject,
+    stop,
+    clearError,
   };
 }

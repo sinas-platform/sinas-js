@@ -3,7 +3,8 @@ export { SinasClient } from './client/SinasClient';
 export { executeQuery } from './client/queries';
 export { executeFunction } from './client/functions';
 export { stateGet, stateSet, stateDelete, stateList } from './client/states';
-export { createChat, sendMessage, streamMessage } from './client/chat';
+export { createChat, sendMessage, streamMessage, getChat, approveToolCall, streamFromChannel } from './client/chat';
+export { listCollections, listFiles } from './client/collections';
 export {
   SinasError,
   SinasAuthError,
@@ -29,11 +30,25 @@ export type {
   StateListResult,
   ChatCreateResult,
   ChatMessage,
+  ChatMessageFull,
+  ToolCallInfo,
+  ChatDetail,
+  ApprovalRequest,
+  ApprovalResult,
+  ContentPart,
+  TextContentPart,
+  ImageContentPart,
+  AudioContentPart,
+  FileContentPart,
+  ComponentContentPart,
+  MessageContent,
   SSEChunk,
+  Collection,
+  FileInfo,
 } from './client/types';
 export type { UseQueryOptions, UseQueryResult } from './hooks/useQuery';
 export type { UseExecuteResult } from './hooks/useExecute';
 export type { UseStateStoreResult, UseStateStoreOptions } from './hooks/useStateStore';
-export type { UseChatResult } from './hooks/useChat';
+export type { ChatSessionMessage, UseChatResult, UseChatOptions } from './hooks/useChat';
 export type { UseSinasResult } from './hooks/useSinas';
 export type { SinasProviderProps } from './hooks/context';
