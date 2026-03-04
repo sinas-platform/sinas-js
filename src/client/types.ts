@@ -83,6 +83,7 @@ export interface ChatDetail {
   agentName: string;
   title: string;
   messages: ChatMessageFull[];
+  pendingApprovals: ApprovalRequest[];
 }
 
 export interface ApprovalRequest {

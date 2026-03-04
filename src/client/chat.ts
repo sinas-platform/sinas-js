@@ -1,5 +1,5 @@
 import type { SinasClient } from './SinasClient';
-import type { ChatCreateResult, ChatMessage, ChatDetail, ChatMessageFull, ApprovalResult, SSEChunk, MessageContent } from './types';
+import type { ChatCreateResult, ChatMessage, ChatDetail, ChatMessageFull, ApprovalRequest, ApprovalResult, SSEChunk, MessageContent } from './types';
 
 export async function createChat(
   client: SinasClient,
@@ -71,6 +71,13 @@ export async function getChat(
     agentName: data.agent_name,
     title: data.title,
     messages: (data.messages || []).map(mapMessage),
+    pendingApprovals: (data.pending_approvals || []).map((pa: Record<string, unknown>): ApprovalRequest => ({
+      type: 'approval_required',
+      toolCallId: pa.tool_call_id as string,
+      functionNamespace: pa.function_namespace as string,
+      functionName: pa.function_name as string,
+      arguments: (pa.arguments as Record<string, unknown>) || {},
+    })),
   };
 }
 

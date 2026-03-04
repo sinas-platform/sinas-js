@@ -8,6 +8,13 @@ export interface ChatSessionMessage extends ChatMessageFull {
   streaming?: boolean;
 }
 
+export interface ToolStatus {
+  toolCallId: string;
+  name: string;
+  description: string;
+  status: 'running' | 'complete';
+}
+
 export interface UseChatResult {
   chatId: string | null;
   messages: ChatSessionMessage[];
@@ -15,6 +22,7 @@ export interface UseChatResult {
   streaming: boolean;
   error: string | null;
   pendingApprovals: ApprovalRequest[];
+  toolStatus: ToolStatus[];
   send: (content: MessageContent) => void;
   approve: (toolCallId: string) => void;
   reject: (toolCallId: string) => void;
@@ -39,10 +47,12 @@ export function useChat(
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = React.useState<ApprovalRequest[]>([]);
+  const [toolStatus, setToolStatus] = React.useState<ToolStatus[]>([]);
 
   const abortRef = React.useRef<AbortController | null>(null);
   const chatIdRef = React.useRef<string | null>(chatId);
   chatIdRef.current = chatId;
+  const activeAssistantIdRef = React.useRef<string>('');
 
   // Load existing chat on mount if chatId provided
   React.useEffect(() => {
@@ -55,6 +65,9 @@ export function useChat(
         if (cancelled) return;
         setChatId(detail.id);
         setMessages(detail.messages);
+        if (detail.pendingApprovals?.length) {
+          setPendingApprovals(detail.pendingApprovals);
+        }
       })
       .catch((e) => {
         if (cancelled) return;
@@ -75,14 +88,15 @@ export function useChat(
   }, []);
 
   const handleStreamChunks = React.useCallback(
-    (assistantId: string) => (chunk: SSEChunk) => {
+    (chunk: SSEChunk) => {
       if (chunk.event === 'message') {
         try {
           const parsed = JSON.parse(chunk.data);
           if (parsed.content) {
+            const targetId = activeAssistantIdRef.current;
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantId
+                m.id === targetId
                   ? { ...m, content: (m.content || '') + parsed.content }
                   : m,
               ),
@@ -90,17 +104,99 @@ export function useChat(
           }
         } catch {
           // Non-JSON content chunk — append raw data
+          const targetId = activeAssistantIdRef.current;
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId
+              m.id === targetId
                 ? { ...m, content: (m.content || '') + chunk.data }
                 : m,
             ),
           );
         }
+      } else if (chunk.event === 'tool_start') {
+        try {
+          const parsed = JSON.parse(chunk.data);
+          setToolStatus((prev) => [
+            ...prev,
+            { toolCallId: parsed.tool_call_id, name: parsed.name, description: parsed.description, status: 'running' },
+          ]);
+          // Insert tool call message before the streaming placeholder so
+          // the "Thinking..." / status text stays at the bottom during execution.
+          const placeholderId = activeAssistantIdRef.current;
+          const toolCallMsg: ChatSessionMessage = {
+            id: `tmp-tc-${parsed.tool_call_id}`,
+            chatId: chatIdRef.current || '',
+            role: 'assistant',
+            content: null,
+            toolCalls: [{
+              id: parsed.tool_call_id,
+              type: 'function',
+              function: { name: parsed.name, arguments: parsed.arguments || '{}' },
+            }],
+            toolCallId: null,
+            name: null,
+            createdAt: new Date().toISOString(),
+          };
+          setMessages((prev) => {
+            // Skip if a message for this tool call already exists (e.g. after approval
+            // refresh replaced tmp IDs with server IDs, but tool call content is the same)
+            const alreadyExists = prev.some((m) =>
+              m.toolCalls?.some((tc) => tc.id === parsed.tool_call_id),
+            );
+            if (alreadyExists) return prev;
+            const idx = prev.findIndex((m) => m.id === placeholderId);
+            if (idx >= 0) {
+              const next = [...prev];
+              next.splice(idx, 0, toolCallMsg);
+              return next;
+            }
+            return [...prev, toolCallMsg];
+          });
+        } catch {
+          // ignore malformed tool_start events
+        }
+      } else if (chunk.event === 'tool_end') {
+        try {
+          const parsed = JSON.parse(chunk.data);
+          setToolStatus((prev) =>
+            prev.map((t) => t.toolCallId === parsed.tool_call_id ? { ...t, status: 'complete' } : t),
+          );
+          // Inject tool result message before the streaming placeholder
+          if (parsed.result !== undefined) {
+            const placeholderId = activeAssistantIdRef.current;
+            const toolResultMsg: ChatSessionMessage = {
+              id: `tmp-tr-${parsed.tool_call_id}`,
+              chatId: chatIdRef.current || '',
+              role: 'tool',
+              content: typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result),
+              toolCalls: null,
+              toolCallId: parsed.tool_call_id,
+              name: parsed.name,
+              createdAt: new Date().toISOString(),
+            };
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.id === placeholderId);
+              if (idx >= 0) {
+                const next = [...prev];
+                next.splice(idx, 0, toolResultMsg);
+                return next;
+              }
+              return [...prev, toolResultMsg];
+            });
+          }
+        } catch {
+          // ignore malformed tool_end events
+        }
       } else if (chunk.event === 'approval_required') {
         try {
-          const parsed = JSON.parse(chunk.data) as ApprovalRequest;
+          const raw = JSON.parse(chunk.data);
+          const parsed: ApprovalRequest = {
+            type: raw.type,
+            toolCallId: raw.tool_call_id,
+            functionNamespace: raw.function_namespace,
+            functionName: raw.function_name,
+            arguments: raw.arguments,
+          };
           setPendingApprovals((prev) => [...prev, parsed]);
         } catch {
           // ignore malformed approval events
@@ -122,6 +218,9 @@ export function useChat(
       try {
         const detail = await getChat(client, id);
         setMessages(detail.messages);
+        if (detail.pendingApprovals?.length) {
+          setPendingApprovals(detail.pendingApprovals);
+        }
       } catch {
         // Refresh is best-effort — streaming content already visible
       }
@@ -155,6 +254,7 @@ export function useChat(
         setStreaming(true);
         setError(null);
         setPendingApprovals([]);
+        setToolStatus([]);
 
         // Add user message optimistically
         const displayContent = typeof content === 'string' ? content : JSON.stringify(content);
@@ -172,6 +272,7 @@ export function useChat(
 
         // Add empty assistant message to accumulate streaming content
         const assistantId = `tmp-assistant-${Date.now()}`;
+        activeAssistantIdRef.current = assistantId;
         const assistantMsg: ChatSessionMessage = {
           id: assistantId,
           chatId: activeChatId,
@@ -189,15 +290,23 @@ export function useChat(
           client,
           activeChatId,
           content,
-          handleStreamChunks(assistantId),
+          handleStreamChunks,
           () => {
             setStreaming(false);
+            setToolStatus([]);
+            // Remove empty streaming placeholders before server refresh replaces everything
+            setMessages((prev) =>
+              prev.filter(
+                (m) => !(m.streaming && m.role === 'assistant' && !m.content && !m.toolCalls),
+              ),
+            );
             // Refresh to get authoritative server state (tool calls, tool responses)
             refreshMessages(activeChatId!);
           },
           (err: Error) => {
             setError(err.message);
             setStreaming(false);
+            setToolStatus([]);
           },
         );
 
@@ -220,6 +329,7 @@ export function useChat(
 
       // Add placeholder assistant message for the resumed stream
       const assistantId = `tmp-resume-${Date.now()}`;
+      activeAssistantIdRef.current = assistantId;
       if (approved) {
         const assistantMsg: ChatSessionMessage = {
           id: assistantId,
@@ -250,14 +360,16 @@ export function useChat(
             client,
             currentChatId,
             result.channelId,
-            handleStreamChunks(assistantId),
+            handleStreamChunks,
             () => {
               setStreaming(false);
+              setToolStatus([]);
               refreshMessages(currentChatId);
             },
             (err: Error) => {
               setError(err.message);
               setStreaming(false);
+              setToolStatus([]);
             },
           );
 
@@ -298,6 +410,7 @@ export function useChat(
     streaming,
     error,
     pendingApprovals,
+    toolStatus,
     send,
     approve,
     reject,

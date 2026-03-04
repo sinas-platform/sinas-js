@@ -49,6 +49,6 @@ export type {
 export type { UseQueryOptions, UseQueryResult } from './hooks/useQuery';
 export type { UseExecuteResult } from './hooks/useExecute';
 export type { UseStateStoreResult, UseStateStoreOptions } from './hooks/useStateStore';
-export type { ChatSessionMessage, UseChatResult, UseChatOptions } from './hooks/useChat';
+export type { ChatSessionMessage, ToolStatus, UseChatResult, UseChatOptions } from './hooks/useChat';
 export type { UseSinasResult } from './hooks/useSinas';
 export type { SinasProviderProps } from './hooks/context';
