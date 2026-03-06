@@ -26,8 +26,7 @@ export class SinasClient {
           enabledFunctions: [],
           enabledQueries: [],
           enabledComponents: [],
-          stateNamespacesReadonly: [],
-          stateNamespacesReadwrite: [],
+          enabledStores: [],
         },
         input: {},
       };

@@ -10,8 +10,7 @@ export interface SinasConfig {
     enabledFunctions: string[];
     enabledQueries: string[];
     enabledComponents: string[];
-    stateNamespacesReadonly: string[];
-    stateNamespacesReadwrite: string[];
+    enabledStores: Array<{ store: string; access: 'readonly' | 'readwrite' }>;
   };
   input: Record<string, unknown>;
 }
