@@ -163,7 +163,9 @@ export function streamFromChannel(
 
 function parseSSE(buffer: string): { chunks: SSEChunk[]; remaining: string } {
   const chunks: SSEChunk[] = [];
-  const lines = buffer.split('\n');
+  // Normalize \r\n to \n (sse_starlette uses \r\n line endings)
+  const normalized = buffer.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
   let event = '';
   let data = '';
   let remaining = '';
@@ -172,7 +174,7 @@ function parseSSE(buffer: string): { chunks: SSEChunk[]; remaining: string } {
     const line = lines[i];
 
     // If last line and doesn't end with newline, it's incomplete
-    if (i === lines.length - 1 && !buffer.endsWith('\n')) {
+    if (i === lines.length - 1 && !normalized.endsWith('\n')) {
       remaining = line;
       break;
     }

@@ -3,7 +3,7 @@ export { executeQuery } from './queries';
 export { executeFunction } from './functions';
 export { stateGet, stateSet, stateDelete, stateList } from './states';
 export { createChat, sendMessage, streamMessage, getChat, approveToolCall, streamFromChannel } from './chat';
-export { listCollections, listFiles } from './collections';
+export { listCollections, listFiles, uploadFile, generateFileUrl } from './collections';
 export { SinasError, SinasAuthError, SinasPermissionError, SinasNotFoundError, SinasTimeoutError } from './errors';
 export type {
   SinasConfig,
@@ -28,4 +28,6 @@ export type {
   SSEChunk,
   Collection,
   FileInfo,
+  FileUploadRequest,
+  FileUrlResult,
 } from './types';

@@ -3,9 +3,16 @@ import { createChat, getChat, streamMessage, approveToolCall, streamFromChannel 
 import { useClient } from './context';
 import type { ChatMessageFull, ApprovalRequest, SSEChunk, MessageContent } from '../client/types';
 
+export interface ToolResult {
+  content: string;
+  name: string;
+}
+
 export interface ChatSessionMessage extends ChatMessageFull {
   /** True while streaming content is being appended */
   streaming?: boolean;
+  /** Inline tool results keyed by tool_call_id (merged from tool_end events) */
+  toolResults?: Record<string, ToolResult>;
 }
 
 export interface ToolStatus {
@@ -53,6 +60,7 @@ export function useChat(
   const chatIdRef = React.useRef<string | null>(chatId);
   chatIdRef.current = chatId;
   const activeAssistantIdRef = React.useRef<string>('');
+  const activeToolCallMsgIdRef = React.useRef<string>('');
 
   // Load existing chat on mount if chatId provided
   React.useEffect(() => {
@@ -132,10 +140,12 @@ export function useChat(
               id: parsed.tool_call_id,
               type: 'function',
               function: { name: parsed.name, arguments: parsed.arguments || '{}' },
+              description: parsed.description,
             }],
             toolCallId: null,
             name: null,
             createdAt: new Date().toISOString(),
+            streaming: true,
           };
           setMessages((prev) => {
             // Skip if a message for this tool call already exists (e.g. after approval
@@ -161,28 +171,23 @@ export function useChat(
           setToolStatus((prev) =>
             prev.map((t) => t.toolCallId === parsed.tool_call_id ? { ...t, status: 'complete' } : t),
           );
-          // Inject tool result message before the streaming placeholder
+          // Merge result into the existing tool call message (same bubble)
           if (parsed.result !== undefined) {
-            const placeholderId = activeAssistantIdRef.current;
-            const toolResultMsg: ChatSessionMessage = {
-              id: `tmp-tr-${parsed.tool_call_id}`,
-              chatId: chatIdRef.current || '',
-              role: 'tool',
-              content: typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result),
-              toolCalls: null,
-              toolCallId: parsed.tool_call_id,
-              name: parsed.name,
-              createdAt: new Date().toISOString(),
-            };
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === placeholderId);
-              if (idx >= 0) {
-                const next = [...prev];
-                next.splice(idx, 0, toolResultMsg);
-                return next;
-              }
-              return [...prev, toolResultMsg];
-            });
+            const resultContent = typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result);
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.toolCalls?.some((tc) => tc.id === parsed.tool_call_id)) {
+                  return {
+                    ...m,
+                    toolResults: {
+                      ...m.toolResults,
+                      [parsed.tool_call_id]: { content: resultContent, name: parsed.name },
+                    },
+                  };
+                }
+                return m;
+              }),
+            );
           }
         } catch {
           // ignore malformed tool_end events

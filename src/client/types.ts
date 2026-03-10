@@ -63,6 +63,8 @@ export interface ToolCallInfo {
     name: string;
     arguments: string;
   };
+  /** Resolved status template description (e.g. "Searching weather in Madrid...") */
+  description?: string;
 }
 
 export interface ChatMessageFull {
@@ -160,4 +162,21 @@ export interface FileInfo {
   content_type: string;
   current_version: number;
   visibility: string;
+}
+
+export interface FileUploadRequest {
+  name: string;
+  content_base64: string;
+  content_type: string;
+  visibility?: 'private' | 'shared';
+  file_metadata?: Record<string, unknown>;
+  update_existing?: boolean;
+}
+
+export interface FileUrlResult {
+  url: string;
+  filename: string;
+  content_type: string;
+  version: number;
+  expires_in: number;
 }
