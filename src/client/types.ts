@@ -120,7 +120,8 @@ export interface AudioContentPart {
 
 export interface FileContentPart {
   type: 'file';
-  file_data: string;
+  file_data?: string;
+  file_url?: string;
   filename: string;
   mime_type: string;
 }
