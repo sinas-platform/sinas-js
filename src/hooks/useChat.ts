@@ -59,8 +59,6 @@ export function useChat(
   const abortRef = React.useRef<AbortController | null>(null);
   const chatIdRef = React.useRef<string | null>(chatId);
   chatIdRef.current = chatId;
-  const activeAssistantIdRef = React.useRef<string>('');
-  const activeToolCallMsgIdRef = React.useRef<string>('');
 
   // Load existing chat on mount if chatId provided
   React.useEffect(() => {
@@ -98,29 +96,37 @@ export function useChat(
   const handleStreamChunks = React.useCallback(
     (chunk: SSEChunk) => {
       if (chunk.event === 'message') {
-        try {
-          const parsed = JSON.parse(chunk.data);
-          if (parsed.content) {
-            const targetId = activeAssistantIdRef.current;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === targetId
-                  ? { ...m, content: (m.content || '') + parsed.content }
-                  : m,
-              ),
-            );
+        // Append text to the last assistant text message, or create a new one.
+        const newContent = (() => {
+          try {
+            const parsed = JSON.parse(chunk.data);
+            return parsed.content || '';
+          } catch {
+            return chunk.data;
           }
-        } catch {
-          // Non-JSON content chunk — append raw data
-          const targetId = activeAssistantIdRef.current;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === targetId
-                ? { ...m, content: (m.content || '') + chunk.data }
-                : m,
-            ),
-          );
-        }
+        })();
+        if (!newContent) return;
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === 'assistant' && !last.toolCalls && last.streaming) {
+            // Append to existing text message
+            const next = [...prev];
+            next[next.length - 1] = { ...last, content: (last.content || '') + newContent };
+            return next;
+          }
+          // Create a new text message
+          return [...prev, {
+            id: `tmp-text-${Date.now()}`,
+            chatId: chatIdRef.current || '',
+            role: 'assistant' as const,
+            content: newContent,
+            toolCalls: null,
+            toolCallId: null,
+            name: null,
+            createdAt: new Date().toISOString(),
+            streaming: true,
+          }];
+        });
       } else if (chunk.event === 'tool_start') {
         try {
           const parsed = JSON.parse(chunk.data);
@@ -128,39 +134,32 @@ export function useChat(
             ...prev,
             { toolCallId: parsed.tool_call_id, name: parsed.name, description: parsed.description, status: 'running' },
           ]);
-          // Insert tool call message before the streaming placeholder so
-          // the "Thinking..." / status text stays at the bottom during execution.
-          const placeholderId = activeAssistantIdRef.current;
-          const toolCallMsg: ChatSessionMessage = {
-            id: `tmp-tc-${parsed.tool_call_id}`,
-            chatId: chatIdRef.current || '',
-            role: 'assistant',
-            content: null,
-            toolCalls: [{
-              id: parsed.tool_call_id,
-              type: 'function',
-              function: { name: parsed.name, arguments: parsed.arguments || '{}' },
-              description: parsed.description,
-            }],
-            toolCallId: null,
-            name: null,
-            createdAt: new Date().toISOString(),
-            streaming: true,
-          };
           setMessages((prev) => {
-            // Skip if a message for this tool call already exists (e.g. after approval
-            // refresh replaced tmp IDs with server IDs, but tool call content is the same)
-            const alreadyExists = prev.some((m) =>
-              m.toolCalls?.some((tc) => tc.id === parsed.tool_call_id),
-            );
-            if (alreadyExists) return prev;
-            const idx = prev.findIndex((m) => m.id === placeholderId);
-            if (idx >= 0) {
-              const next = [...prev];
-              next.splice(idx, 0, toolCallMsg);
-              return next;
+            if (prev.some((m) => m.toolCalls?.some((tc) => tc.id === parsed.tool_call_id))) {
+              return prev;
             }
-            return [...prev, toolCallMsg];
+            // Stop streaming on previous text message (freeze it in place)
+            const next = prev.map((m, i) =>
+              i === prev.length - 1 && m.streaming && m.role === 'assistant' && !m.toolCalls
+                ? { ...m, streaming: false }
+                : m,
+            );
+            return [...next, {
+              id: `tmp-tc-${parsed.tool_call_id}`,
+              chatId: chatIdRef.current || '',
+              role: 'assistant' as const,
+              content: null,
+              toolCalls: [{
+                id: parsed.tool_call_id,
+                type: 'function' as const,
+                function: { name: parsed.name, arguments: parsed.arguments || '{}' },
+                description: parsed.description,
+              }],
+              toolCallId: null,
+              name: null,
+              createdAt: new Date().toISOString(),
+              streaming: true,
+            }];
           });
         } catch {
           // ignore malformed tool_start events
@@ -275,22 +274,6 @@ export function useChat(
         };
         setMessages((prev) => [...prev, userMsg]);
 
-        // Add empty assistant message to accumulate streaming content
-        const assistantId = `tmp-assistant-${Date.now()}`;
-        activeAssistantIdRef.current = assistantId;
-        const assistantMsg: ChatSessionMessage = {
-          id: assistantId,
-          chatId: activeChatId,
-          role: 'assistant',
-          content: '',
-          toolCalls: null,
-          toolCallId: null,
-          name: null,
-          createdAt: new Date().toISOString(),
-          streaming: true,
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-
         const controller = streamMessage(
           client,
           activeChatId,
@@ -299,13 +282,7 @@ export function useChat(
           () => {
             setStreaming(false);
             setToolStatus([]);
-            // Remove empty streaming placeholders before server refresh replaces everything
-            setMessages((prev) =>
-              prev.filter(
-                (m) => !(m.streaming && m.role === 'assistant' && !m.content && !m.toolCalls),
-              ),
-            );
-            // Refresh to get authoritative server state (tool calls, tool responses)
+            // Refresh to get authoritative server state
             refreshMessages(activeChatId!);
           },
           (err: Error) => {
@@ -332,23 +309,7 @@ export function useChat(
       setStreaming(true);
       setError(null);
 
-      // Add placeholder assistant message for the resumed stream
-      const assistantId = `tmp-resume-${Date.now()}`;
-      activeAssistantIdRef.current = assistantId;
-      if (approved) {
-        const assistantMsg: ChatSessionMessage = {
-          id: assistantId,
-          chatId: currentChatId,
-          role: 'assistant',
-          content: '',
-          toolCalls: null,
-          toolCallId: null,
-          name: null,
-          createdAt: new Date().toISOString(),
-          streaming: true,
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-      }
+      // No placeholder needed — handleStreamChunks creates messages on demand
 
       (async () => {
         try {
