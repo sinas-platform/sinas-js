@@ -15,6 +15,76 @@ export interface SinasConfig {
   input: Record<string, unknown>;
 }
 
+// ─── Auth ───
+
+export type AuthMode = 'otp' | 'password' | 'password+otp';
+
+export interface InfoResponse {
+  auth_mode: AuthMode;
+  version: string;
+  features: Record<string, boolean>;
+}
+
+export interface LoginRequest {
+  email: string;
+  password?: string;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  last_login_at: string | null;
+  created_at: string;
+  roles: string[];
+}
+
+export interface LoginResponse {
+  message: string;
+  /** Present when auth_mode includes "otp" — feed into verifyOTP. */
+  session_id?: string;
+  /** Present in password-only mode — login is complete. */
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  expires_in?: number;
+  user?: AuthUser;
+}
+
+export interface OTPVerifyRequest {
+  session_id: string;
+  otp_code: string;
+}
+
+export interface OTPVerifyResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+export interface RefreshResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface PermissionCheckRequest {
+  permissions: string[];
+  logic?: 'AND' | 'OR';
+}
+
+export interface PermissionCheckResult {
+  permission: string;
+  has_permission: boolean;
+}
+
+export interface PermissionCheckResponse {
+  result: boolean;
+  logic: string;
+  checks: PermissionCheckResult[];
+}
+
 export interface QueryResult {
   success: boolean;
   operation: string;
