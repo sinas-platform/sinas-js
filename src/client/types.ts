@@ -155,6 +155,12 @@ export interface ChatDetail {
   title: string;
   messages: ChatMessageFull[];
   pendingApprovals: ApprovalRequest[];
+  /**
+   * The ask_user questions the chat is suspended on. Present when the
+   * server reports them (Sinas 0.5+); undefined on older servers, which
+   * have no ask_user.
+   */
+  pendingInputs?: PendingInput[];
 }
 
 export interface ApprovalRequest {
@@ -165,10 +171,149 @@ export interface ApprovalRequest {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * What happens to the round after an approval decision (Sinas 0.5+).
+ * `waiting`: other calls of the same round still wait for a decision, so
+ * nothing resumes yet and there is nothing to stream. `queued`: this was the
+ * round's last decision; the round resumes on `channelId` (this includes a
+ * final rejection, which the model gets as a rejection result).
+ */
+export type ApprovalResume = 'waiting' | 'queued';
+
 export interface ApprovalResult {
   status: string;
   toolCallId: string;
   channelId: string;
+  /** Undefined on servers before Sinas 0.5, which resume on every approval. */
+  resume?: ApprovalResume;
+  message?: string;
+}
+
+export interface ApproveToolCallOptions {
+  /**
+   * Approve this tool for the rest of the chat: later calls of the same tool
+   * skip the ask. Only applies to an approval (ignored when rejecting).
+   */
+  alwaysAllow?: boolean;
+}
+
+// ─── Deferred turns: ask_user questions and turn status (Sinas 0.5+) ───
+
+/** An ask_user question the conversation is suspended on. */
+export interface PendingInput {
+  toolCallId: string;
+  question: string;
+  /** Suggested answers, or null for a free-text question. */
+  options: string[] | null;
+  /** ISO timestamp after which the question expires (the round then resumes without it). */
+  expiresAt: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * How a synchronously answered turn ended.
+ * - `completed`: the final reply is in the response.
+ * - `input_required`: the agent asked the user; see `pendingInputs` and
+ *   answer with `answerPendingInput`.
+ * - `in_progress`: the turn goes on without this request; follow it on
+ *   `channelId` (`streamFromChannel`) or read the chat later.
+ * - `injected`: the chat was busy, so the message was delivered into the
+ *   running (or parked) turn; nothing was answered by this request.
+ */
+export type TurnStatus = 'completed' | 'input_required' | 'in_progress' | 'injected';
+
+/** LLM usage of one request (the reply plus its tool rounds). */
+export interface TurnUsage {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Null when calls were made but none could be priced. */
+  costUsd: number | null;
+  unpricedCalls: number;
+  errors: number;
+}
+
+export interface TurnState {
+  status: TurnStatus;
+  pendingInputs: PendingInput[];
+  /** Channel of the turn still going on (`in_progress`) or of the parked turn (`injected`). */
+  channelId: string | null;
+  /** Null when the server could not determine it (or predates Sinas 0.5). */
+  usage: TurnUsage | null;
+}
+
+/** Result of a non-streaming `sendMessage`. The base fields are unchanged; the turn state is Sinas 0.5+. */
+export interface MessageSendResult extends ChatMessage, TurnState {}
+
+export interface InvokeOptions {
+  /** Session key for conversation continuity across invokes. */
+  sessionKey?: string;
+  /** Archive the session's existing chat and start fresh. */
+  reset?: boolean;
+  /** Agent input variables (only used when a new chat is created). */
+  input?: Record<string, unknown>;
+}
+
+export interface InvokeResult extends TurnState {
+  /** The final reply (`completed`); what the agent said before asking or waiting otherwise; empty when `injected`. */
+  reply: string;
+  chatId: string;
+  sessionKey: string | null;
+}
+
+export interface AnswerPendingInputOptions {
+  /**
+   * Wait for the resumed turn and return its result instead of a channel to
+   * stream it from.
+   */
+  wait?: boolean;
+}
+
+/** The answer was recorded (HTTP 202, without `wait`). */
+export interface PendingInputAnswerAccepted {
+  status: 'answered';
+  toolCallId: string;
+  /** The answer was the round's last outstanding completion; its resume is queued. */
+  resumed: boolean;
+  /** The last completion, but the resume could not be queued yet; it is retried shortly. */
+  resumePending: boolean;
+  /** Where the resumed turn streams, when `resumed` or `resumePending`. */
+  channelId: string | null;
+  message: string;
+}
+
+/** The resumed turn's result (HTTP 200, with `wait: true`). */
+export interface PendingInputAnswerResult extends TurnState {
+  toolCallId: string;
+  chatId: string;
+  reply: string;
+  /** The message `reply` comes from, when there is one. */
+  message: ChatMessageFull | null;
+}
+
+export interface StreamOptions {
+  /**
+   * Stream the model's thinking text (Sinas 0.5+). Without it, a stream still
+   * gets one empty `thinking` when the model starts thinking.
+   */
+  includeThinking?: boolean;
+}
+
+export interface StreamFromChannelOptions extends StreamOptions {
+  /** Last received stream entry id to resume after (default "0": from the start). */
+  lastId?: string;
+}
+
+/**
+ * How a stream ended. `completed`: the turn finished. `suspended`: the turn
+ * is parked waiting on the user (an ask_user question); the answer resumes it
+ * on a new channel. `closed`: the connection ended without a `done` event.
+ */
+export interface StreamDone {
+  status: 'completed' | 'suspended' | 'closed' | (string & {});
 }
 
 // Multimodal content types
@@ -217,6 +362,28 @@ export type MessageContent = string | ContentPart[];
 export interface SSEChunk {
   event: string;
   data: string;
+}
+
+/** Data of an `input_required` stream event: the agent asked the user (ask_user). */
+export interface InputRequiredEvent {
+  type: 'input_required';
+  tool_call_id: string;
+  question: string;
+  options?: string[] | null;
+  expires_at?: string | null;
+}
+
+/**
+ * Data of a `round_suspended` stream event: the tool round is parked on
+ * deferred work (questions, background runs, sub-agents). It resumes on
+ * `channel_id` when that work lands by itself.
+ */
+export interface RoundSuspendedEvent {
+  type: 'round_suspended';
+  tool_call_ids: string[];
+  channel_id?: string | null;
+  pending_completion_id?: string;
+  usage?: Record<string, unknown> | null;
 }
 
 export interface Collection {

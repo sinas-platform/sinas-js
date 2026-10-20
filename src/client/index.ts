@@ -21,7 +21,24 @@ export type {
   BatchExecutionItem,
 } from './functions';
 export { stateGet, stateSet, stateDelete, stateList } from './states';
-export { createChat, sendMessage, streamMessage, getChat, approveToolCall, streamFromChannel } from './chat';
+export {
+  createChat,
+  sendMessage,
+  streamMessage,
+  getChat,
+  approveToolCall,
+  streamFromChannel,
+  invokeAgent,
+  listPendingInputs,
+  answerPendingInput,
+} from './chat';
+export {
+  parsePendingInput,
+  parsePendingInputs,
+  pendingInputFromChunk,
+  approvalResumeChannel,
+  answerResumeChannel,
+} from './chatEvents';
 export { listCollections, listFiles, uploadFile, generateFileUrl } from './collections';
 export {
   getInfo,
@@ -52,6 +69,23 @@ export type {
   ChatDetail,
   ApprovalRequest,
   ApprovalResult,
+  ApprovalResume,
+  ApproveToolCallOptions,
+  PendingInput,
+  TurnStatus,
+  TurnUsage,
+  TurnState,
+  MessageSendResult,
+  InvokeOptions,
+  InvokeResult,
+  AnswerPendingInputOptions,
+  PendingInputAnswerAccepted,
+  PendingInputAnswerResult,
+  StreamOptions,
+  StreamFromChannelOptions,
+  StreamDone,
+  InputRequiredEvent,
+  RoundSuspendedEvent,
   ContentPart,
   TextContentPart,
   ImageContentPart,

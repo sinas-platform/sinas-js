@@ -36,14 +36,17 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/chat-events.test.mjs tests/chat-state.test.mjs tests/chat-client.test.mjs tests/use-chat.test.mjs"
   },
   "peerDependencies": {
     "react": ">=17.0.0"
   },
   "devDependencies": {
-    "react": "^18.3.1",
     "@types/react": "^18.3.12",
+    "esbuild": "^0.27.3",
+    "react": "^18.3.1",
+    "react-test-renderer": "^18.3.1",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2"
   }

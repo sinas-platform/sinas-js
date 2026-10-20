@@ -22,7 +22,24 @@ export type {
   BatchExecutionItem,
 } from './client/functions';
 export { stateGet, stateSet, stateDelete, stateList } from './client/states';
-export { createChat, sendMessage, streamMessage, getChat, approveToolCall, streamFromChannel } from './client/chat';
+export {
+  createChat,
+  sendMessage,
+  streamMessage,
+  getChat,
+  approveToolCall,
+  streamFromChannel,
+  invokeAgent,
+  listPendingInputs,
+  answerPendingInput,
+} from './client/chat';
+export {
+  parsePendingInput,
+  parsePendingInputs,
+  pendingInputFromChunk,
+  approvalResumeChannel,
+  answerResumeChannel,
+} from './client/chatEvents';
 export { listCollections, listFiles, uploadFile, generateFileUrl } from './client/collections';
 export {
   getInfo,
@@ -64,6 +81,23 @@ export type {
   ChatDetail,
   ApprovalRequest,
   ApprovalResult,
+  ApprovalResume,
+  ApproveToolCallOptions,
+  PendingInput,
+  TurnStatus,
+  TurnUsage,
+  TurnState,
+  MessageSendResult,
+  InvokeOptions,
+  InvokeResult,
+  AnswerPendingInputOptions,
+  PendingInputAnswerAccepted,
+  PendingInputAnswerResult,
+  StreamOptions,
+  StreamFromChannelOptions,
+  StreamDone,
+  InputRequiredEvent,
+  RoundSuspendedEvent,
   ContentPart,
   TextContentPart,
   ImageContentPart,
@@ -91,7 +125,16 @@ export type {
 export type { UseQueryOptions, UseQueryResult } from './hooks/useQuery';
 export type { UseExecuteResult } from './hooks/useExecute';
 export type { UseStateStoreResult, UseStateStoreOptions } from './hooks/useStateStore';
-export type { ChatSessionMessage, ToolResult, ToolStatus, UseChatResult, UseChatOptions } from './hooks/useChat';
+export type {
+  ChatSessionMessage,
+  ToolResult,
+  ToolStatus,
+  ChatThinking,
+  ApproveOptions,
+  FollowOptions,
+  UseChatResult,
+  UseChatOptions,
+} from './hooks/useChat';
 export type { UseSinasResult } from './hooks/useSinas';
 export type { UseAuthResult, UseAuthOptions, AuthStatus } from './hooks/useAuth';
 export type { SinasProviderProps } from './hooks/context';
